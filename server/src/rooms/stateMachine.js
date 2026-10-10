@@ -38,6 +38,7 @@ export const startGame = (io, roomId) => {
   });
 
   room.round = 1;
+  room.history = [];
   room.turnQueue = room.players.filter(p => p.connected).map(p => p.id);
   room.currentTurnIndex = 0;
 
@@ -224,6 +225,20 @@ export const endTurn = (io, roomId) => {
   const drawerScore = calculateDrawerScore(guesserScores);
   if (drawerScore > 0) {
     room.turnScores[room.drawerId] = drawerScore;
+  }
+
+  // Record history
+  const drawerPlayer = room.players.find(p => p.id === room.drawerId);
+  room.history.push({
+    round: room.round,
+    drawerName: drawerPlayer ? drawerPlayer.name : 'Unknown',
+    word: room.secretWord,
+    durationMs: room.settings.drawTimeSec * 1000,
+    ops: [...room.ops]
+  });
+  
+  if (room.history.length > 50) {
+    room.history.shift();
   }
 
   // Update total scores

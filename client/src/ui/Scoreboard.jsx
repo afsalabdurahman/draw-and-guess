@@ -1,7 +1,10 @@
 import { useGameStore } from '../store/useGameStore';
 import { socket } from '../socket';
+import { useState } from 'react';
+import Replay from './Replay';
 
 export default function Scoreboard() {
+  const [showReplay, setShowReplay] = useState(false);
   const phase = useGameStore((state) => state.phase);
   const secretWord = useGameStore((state) => state.secretWord);
   const roomId = useGameStore((state) => state.roomId);
@@ -64,19 +67,30 @@ export default function Scoreboard() {
               ))}
             </div>
 
-            {isHost ? (
+            <div className="flex gap-4">
               <button
-                onClick={() => socket.emit('game:reset', { roomId })}
-                className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-12 rounded-full shadow-lg text-xl transition-transform hover:scale-105"
+                onClick={() => setShowReplay(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-4 px-12 rounded-full shadow-lg text-xl transition-transform hover:scale-105"
               >
-                Play Again
+                Watch Replays
               </button>
-            ) : (
-              <p className="text-slate-400">Waiting for host to play again...</p>
-            )}
+              
+              {isHost ? (
+                <button
+                  onClick={() => socket.emit('game:reset', { roomId })}
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-12 rounded-full shadow-lg text-xl transition-transform hover:scale-105"
+                >
+                  Play Again
+                </button>
+              ) : (
+                <p className="text-slate-400 flex items-center px-4">Waiting for host to play again...</p>
+              )}
+            </div>
           </>
         )}
       </div>
+
+      {showReplay && <Replay roomId={roomId} onClose={() => setShowReplay(false)} />}
     </div>
   );
 }

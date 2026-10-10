@@ -55,6 +55,17 @@ app.get('/rooms/:id', (req, res) => {
   });
 });
 
+app.get('/rooms/:id/replay', (req, res) => {
+  const room = roomManager.getRoom(req.params.id);
+  if (!room) {
+    return res.status(404).json({ exists: false });
+  }
+  if (room.phase !== 'GAME_END') {
+    return res.status(403).json({ error: 'Replays are only available after the game ends.' });
+  }
+  res.json({ history: room.history || [] });
+});
+
 // broadcastRoomState is now imported from stateMachine.js
 
 const validateDrawingOp = (socket, roomId) => {
@@ -236,6 +247,7 @@ io.on('connection', (socket) => {
 
       room.phase = 'LOBBY';
       room.players.forEach(p => p.score = 0);
+      room.history = [];
       broadcastRoomState(io, data.roomId);
 
       if (callback) callback({ success: true });
