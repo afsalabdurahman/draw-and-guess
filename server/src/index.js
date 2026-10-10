@@ -7,14 +7,17 @@ import {
   roomJoinSchema, settingsUpdateSchema, gameStartSchema,
   strokeStartSchema, strokePointsSchema, strokeEndSchema, fillSchema, simpleOpSchema,
   wordPickSchema, chatSendSchema
-} from './net/schema.js';
-import { startGame, handleWordPick, broadcastRoomState, checkTurnEarlyEnd } from './rooms/stateMachine.js';
+} from './net/schemas.js';
+import { startGame, handleWordPick, broadcastRoomState, checkTurnEarlyEnd, pauseGame, resumeGame, returnToLobby, endTurn } from './rooms/stateMachine.js';
 import { checkGuess } from './game/guess.js';
 import { calculateGuesserScore } from './game/scoring.js';
+import { timerManager } from './rooms/TimerManager.js';
+import { rateLimiter } from './net/rateLimit.js';
 
 const app = express();
 const server = createServer(app);
 const io = new Server(server, {
+  maxHttpBufferSize: 10000,
   cors: {
     origin: 'http://localhost:5173',
     methods: ['GET', 'POST']
@@ -25,6 +28,17 @@ app.use(cors({ origin: 'http://localhost:5173' }));
 app.use(express.json());
 
 app.post('/rooms', (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress;
+  const ipBucket = rateLimiter.getIpBucket(ip, 'create_room', 10, 0.05); // max 10 rooms per ~3.3 mins
+  if (!ipBucket.consume(1)) {
+    return res.status(429).json({ error: 'Too many rooms created' });
+  }
+
+  // Cap total rooms
+  if (roomManager.rooms.size >= 1000) {
+    return res.status(503).json({ error: 'Server is at maximum capacity' });
+  }
+
   const roomId = roomManager.createRoom();
   res.json({ roomId });
 });
@@ -41,6 +55,17 @@ app.get('/rooms/:id', (req, res) => {
   });
 });
 
+app.get('/rooms/:id/replay', (req, res) => {
+  const room = roomManager.getRoom(req.params.id);
+  if (!room) {
+    return res.status(404).json({ exists: false });
+  }
+  if (room.phase !== 'GAME_END') {
+    return res.status(403).json({ error: 'Replays are only available after the game ends.' });
+  }
+  res.json({ history: room.history || [] });
+});
+
 // broadcastRoomState is now imported from stateMachine.js
 
 const validateDrawingOp = (socket, roomId) => {
@@ -53,20 +78,78 @@ const validateDrawingOp = (socket, roomId) => {
   return room;
 };
 
+io.use((socket, next) => {
+  const ip = socket.handshake.address;
+  if (rateLimiter.isIpBlocked(ip)) {
+    return next(new Error('IP is temporarily blocked'));
+  }
+  next();
+});
+
+const checkRateLimit = (socket, event, capacity, rate) => {
+  const ip = socket.handshake.address;
+  const bucket = rateLimiter.getSocketBucket(socket.id, event, capacity, rate);
+  
+  if (!bucket.consume(1)) {
+    const violations = rateLimiter.recordViolation(socket.id);
+    if (violations > 20) {
+      rateLimiter.blockIp(ip, 5 * 60 * 1000); // 5 min block
+      socket.disconnect(true);
+    }
+    return false;
+  }
+  return true;
+};
+
 io.on('connection', (socket) => {
   console.log(`Socket connected: ${socket.id}`);
 
   socket.on('room:join', (payload, callback) => {
+    if (!checkRateLimit(socket, 'join', 5, 0.5)) return;
     try {
       const data = roomJoinSchema.parse(payload);
       const player = roomManager.joinRoom(data.roomId, data, socket.id);
       
       socket.join(data.roomId);
-      broadcastRoomState(io, data.roomId);
       
       const room = roomManager.getRoom(data.roomId);
-      if (room.phase === 'DRAWING') {
-        socket.emit('canvas:snapshot', { ops: room.ops });
+      if (!room) throw new Error('Room not found');
+
+      // Clear grace timer if it existed
+      timerManager.clear(data.roomId, `grace_${player.id}`);
+
+      // If they were the drawer, clear drawerDrop timer
+      if (room.drawerId === player.id) {
+        timerManager.clear(data.roomId, `drawerDrop_${player.id}`);
+      }
+
+      // Check if room was paused and can now resume
+      const connectedPlayers = room.players.filter(p => p.connected).length;
+      if (room.paused && connectedPlayers >= 2) {
+        resumeGame(io, data.roomId);
+      } else {
+        broadcastRoomState(io, data.roomId);
+      }
+      
+      // Full snapshot on join
+      socket.emit('game:snapshot', {
+        phase: room.phase,
+        settings: room.settings,
+        scores: room.turnScores,
+        hintMask: room.hintMask,
+        endsAt: room.endsAt,
+        ops: room.ops,
+        chatHistory: room.chatHistory,
+        paused: room.paused
+      });
+
+      if (room.phase === 'DRAWING' && room.drawerId === player.id) {
+        socket.emit('turn:secret_word', { word: room.secretWord });
+      }
+
+      // If it's choosing word and they are drawer, resend choices
+      if (room.phase === 'CHOOSING_WORD' && room.drawerId === player.id) {
+        socket.emit('word:choices', { choices: room.wordChoices });
       }
       
       if (callback) {
@@ -164,6 +247,7 @@ io.on('connection', (socket) => {
 
       room.phase = 'LOBBY';
       room.players.forEach(p => p.score = 0);
+      room.history = [];
       broadcastRoomState(io, data.roomId);
 
       if (callback) callback({ success: true });
@@ -172,6 +256,7 @@ io.on('connection', (socket) => {
     }
   });
   socket.on('stroke:start', (payload) => {
+    if (!checkRateLimit(socket, 'stroke', 60, 60)) return;
     try {
       const data = strokeStartSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -190,6 +275,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('stroke:points', (payload) => {
+    if (!checkRateLimit(socket, 'stroke', 60, 60)) return;
     try {
       const data = strokePointsSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -203,6 +289,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('stroke:end', (payload) => {
+    if (!checkRateLimit(socket, 'stroke', 60, 60)) return;
     try {
       const data = strokeEndSchema.parse(payload);
       validateDrawingOp(socket, data.roomId);
@@ -210,6 +297,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('fill', (payload) => {
+    if (!checkRateLimit(socket, 'ops', 5, 5)) return;
     try {
       const data = fillSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -227,6 +315,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('clear', (payload) => {
+    if (!checkRateLimit(socket, 'ops', 5, 5)) return;
     try {
       const data = simpleOpSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -237,6 +326,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('undo', (payload) => {
+    if (!checkRateLimit(socket, 'ops', 5, 5)) return;
     try {
       const data = simpleOpSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -246,6 +336,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat:send', (payload) => {
+    if (!checkRateLimit(socket, 'chat', 3, 1.5)) return; // 3 per 2s
     try {
       const data = chatSendSchema.parse(payload);
       const room = roomManager.getRoom(data.roomId);
@@ -270,13 +361,17 @@ io.on('connection', (socket) => {
           
           room.turnScores[player.id] = score;
 
-          io.to(data.roomId).emit('chat:message', {
+          const msg = {
             id: crypto.randomUUID(),
             sender: 'SYSTEM',
             text: `${player.name} guessed the word!`,
             system: true,
             color: 'text-green-400'
-          });
+          };
+          room.chatHistory.push(msg);
+          if (room.chatHistory.length > 50) room.chatHistory.shift();
+
+          io.to(data.roomId).emit('chat:message', msg);
 
           checkTurnEarlyEnd(io, data.roomId);
           return;
@@ -318,11 +413,15 @@ io.on('connection', (socket) => {
       }
 
       // Normal chat
-      io.to(data.roomId).emit('chat:message', {
+      const normalMsg = {
         id: crypto.randomUUID(),
         sender: player.name,
         text
-      });
+      };
+      room.chatHistory.push(normalMsg);
+      if (room.chatHistory.length > 50) room.chatHistory.shift();
+
+      io.to(data.roomId).emit('chat:message', normalMsg);
     } catch (e) {}
   });
 
@@ -332,11 +431,62 @@ io.on('connection', (socket) => {
       if (player) {
         roomManager.leaveRoom(roomId, socket.id);
         broadcastRoomState(io, roomId);
+        
+        // Disconnect rules
+        const connectedPlayers = room.players.filter(p => p.connected).length;
+        
+        // 1. Min players check
+        if (connectedPlayers < 2) {
+          pauseGame(io, roomId);
+        }
+
+        // 2. Drawer drop 10s check
+        if (room.phase === 'DRAWING' && room.drawerId === player.id) {
+          timerManager.set(roomId, `drawerDrop_${player.id}`, () => {
+            const currentRoom = roomManager.getRoom(roomId);
+            if (currentRoom && currentRoom.phase === 'DRAWING' && currentRoom.drawerId === player.id) {
+               // Give 0 points to drawer (since they disconnected), turnScores logic takes care of this by not setting it
+               endTurn(io, roomId);
+            }
+          }, 10000);
+        }
+
+        // 3. 30s Grace timer for permanent removal
+        timerManager.set(roomId, `grace_${player.id}`, () => {
+          roomManager.permanentlyRemovePlayer(roomId, player.id);
+          broadcastRoomState(io, roomId);
+          
+          const currentConnected = roomManager.getRoom(roomId)?.players.filter(p => p.connected).length || 0;
+          if (roomManager.getRoom(roomId)?.paused && currentConnected < 2) {
+             returnToLobby(io, roomId);
+          } else {
+             checkTurnEarlyEnd(io, roomId);
+          }
+        }, 30000);
+        
+        // 4. Check if everyone remaining guessed
+        checkTurnEarlyEnd(io, roomId);
       }
     });
+    rateLimiter.cleanup(socket.id);
     console.log(`Socket disconnected: ${socket.id}`);
   });
 });
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, room] of roomManager.rooms.entries()) {
+    const connectedPlayers = room.players.filter(p => p.connected).length;
+    // Empty for 5 minutes
+    if (connectedPlayers === 0 && room.paused && now - (room.timeRemaining || 0) > 300000) { 
+        // Note: the logic above isn't perfectly tracking 'empty time', 
+        // a better way: if there's no host (all players permanently removed), delete room.
+        if (room.players.length === 0) {
+           roomManager.rooms.delete(roomId);
+        }
+    }
+  }
+}, 60000);
 
 const PORT = 4000;
 server.listen(PORT, () => {

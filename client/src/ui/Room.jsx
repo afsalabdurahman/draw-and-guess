@@ -9,6 +9,8 @@ import Countdown from './Countdown';
 import WordPicker from './WordPicker';
 import Scoreboard from './Scoreboard';
 import Chat from './Chat';
+import { useSound } from '../hooks/useSound';
+import { Volume2, VolumeX, Edit3, CheckCircle2 } from 'lucide-react';
 
 export default function Room() {
   const { id: roomId } = useParams();
@@ -22,12 +24,17 @@ export default function Room() {
   const drawerId = useGameStore((state) => state.drawerId);
   const secretWord = useGameStore((state) => state.secretWord);
   const hintMask = useGameStore((state) => state.hintMask);
+  const paused = useGameStore((state) => state.paused);
   const settings = useGameStore((state) => state.settings);
   const setRoomInfo = useGameStore((state) => state.setRoomInfo);
   const playerId = useGameStore((state) => state.playerId);
 
   const [needsName, setNeedsName] = useState(false);
   const isHost = playerId && hostId === playerId;
+  const [connected, setConnected] = useState(socket.connected);
+  
+  const { muted, toggleMute, playPop, playTada } = useSound();
+  const [showTurnBanner, setShowTurnBanner] = useState(false);
   
   const [localSettings, setLocalSettings] = useState(settings);
 
@@ -51,7 +58,15 @@ export default function Room() {
 
     tryJoin();
 
+    const onConnect = () => setConnected(true);
+    const onDisconnect = () => setConnected(false);
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+
     return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
       socket.disconnect();
     };
   }, [roomId]);
@@ -77,7 +92,10 @@ export default function Room() {
       console.error(err);
       setError(err.message);
       setNeedsName(true);
-      socket.disconnect();
+      if (err.message.includes('not found') || err.message.includes('already started') || err.message.includes('full')) {
+         // Keep socket disconnected for these fatal errors
+         socket.disconnect();
+      }
     } finally {
       setJoining(false);
     }
@@ -127,6 +145,42 @@ export default function Room() {
     }
   };
 
+  // Watch for phase changes to show turn banners
+  useEffect(() => {
+    if (phase === 'CHOOSING_WORD' || phase === 'DRAWING') {
+      setShowTurnBanner(true);
+      const t = setTimeout(() => setShowTurnBanner(false), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [phase, drawerId]);
+
+  // Watch for chat events for sound
+  useEffect(() => {
+     const onChat = (msg) => {
+         if (msg.system && msg.text.includes('guessed the word')) {
+             playTada();
+         } else {
+             playPop();
+         }
+     };
+     socket.on('chat:message', onChat);
+     return () => socket.off('chat:message', onChat);
+  }, [playPop, playTada]);
+
+  if (error && (error.includes('not found') || error.includes('already started') || error.includes('full'))) {
+      return (
+          <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center p-4">
+              <div className="bg-slate-800 border-2 border-red-500/50 p-8 rounded-xl shadow-2xl max-w-md w-full text-center">
+                  <h2 className="text-3xl font-bold text-red-400 mb-4">Cannot Join Room</h2>
+                  <p className="text-slate-300 mb-8">{error}</p>
+                  <a href="/" className="inline-block bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                      Back to Home
+                  </a>
+              </div>
+          </div>
+      );
+  }
+
   if (needsName) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -157,37 +211,58 @@ export default function Room() {
   }
   
   const connectedPlayers = players.filter(p => p.connected).length;
+  const drawer = players.find(p => p.id === drawerId);
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white p-8">
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-8">
+    <div className="min-h-screen bg-slate-900 text-white p-4 md:p-8">
+      {!connected && !needsName && !error && (
+         <div className="fixed top-0 left-0 right-0 bg-red-600 text-white text-center py-2 font-bold z-50 animate-pulse shadow-lg">
+             Connection lost. Reconnecting...
+         </div>
+      )}
+      
+      {showTurnBanner && drawer && (
+         <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-indigo-600/90 text-white px-8 py-3 rounded-full font-bold z-40 shadow-2xl animate-bounce backdrop-blur-sm border border-indigo-400">
+             {phase === 'CHOOSING_WORD' ? `${drawer.name} is choosing a word!` : `${drawer.name} is drawing!`}
+         </div>
+      )}
+
+      <div className="max-w-6xl mx-auto flex flex-col lg:grid lg:grid-cols-4 gap-4 md:gap-8">
         
-        {/* Left Col: Toolbox (if playing) */}
+        {/* Left Col: Toolbox (if playing, on desktop) */}
         {phase !== 'LOBBY' && (
-          <div className="hidden lg:block">
+          <div className="hidden lg:block lg:col-span-1 order-1 lg:order-none">
              <Toolbox />
           </div>
         )}
 
         {/* Center/Main Area */}
-        <div className={phase === 'LOBBY' ? "lg:col-span-3 space-y-6" : "lg:col-span-2 space-y-6"}>
-            <div className="flex justify-between items-center bg-slate-800 rounded-xl p-6 shadow-xl">
+        <div className={`order-3 lg:order-none ${phase === 'LOBBY' ? "lg:col-span-3" : "lg:col-span-2"} space-y-4 md:space-y-6`}>
+            <div className="flex justify-between items-center bg-slate-800 rounded-xl p-4 md:p-6 shadow-xl">
             <div>
-                <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">Room: {roomId}</h1>
-                <p className="text-slate-400 font-medium">Phase: <span className="text-yellow-400">{phase}</span></p>
+                <h1 className="text-2xl md:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">Room: {roomId}</h1>
+                <p className="text-slate-400 font-medium text-sm md:text-base">Phase: <span className="text-yellow-400">{phase}</span></p>
                 {phase === 'DRAWING' && hintMask && (
                     <div className="text-2xl tracking-widest font-mono mt-2 bg-slate-900 py-1 px-4 rounded inline-block text-white">
                         {hintMask}
                     </div>
                 )}
             </div>
-            <button
-                onClick={copyLink}
-                className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg transition-colors"
-            >
-                <Copy size={18} />
-                Copy Invite Link
-            </button>
+            <div className="flex items-center gap-2">
+                <button
+                    onClick={toggleMute}
+                    className="flex items-center justify-center bg-slate-700 hover:bg-slate-600 w-10 h-10 rounded-lg transition-colors"
+                >
+                    {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                </button>
+                <button
+                    onClick={copyLink}
+                    className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-lg transition-colors text-sm md:text-base"
+                >
+                    <Copy size={18} />
+                    <span className="hidden md:inline">Copy Invite Link</span>
+                </button>
+            </div>
             </div>
 
             <div className="bg-slate-800 rounded-xl p-4 shadow-xl flex flex-col items-center justify-center relative">
@@ -229,6 +304,24 @@ export default function Room() {
                           </div>
                       )}
 
+                      {paused && (
+                          <div className="absolute inset-0 bg-slate-900/80 backdrop-blur z-50 flex items-center justify-center">
+                              <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-yellow-500/50 text-center animate-pulse">
+                                  <div className="text-4xl font-black text-yellow-400 mb-2">Game Paused</div>
+                                  <div className="text-xl text-slate-300">Waiting for players to reconnect...</div>
+                              </div>
+                          </div>
+                      )}
+
+                      {paused && (
+                          <div className="absolute inset-0 bg-slate-900/80 backdrop-blur z-50 flex items-center justify-center">
+                              <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-yellow-500/50 text-center animate-pulse">
+                                  <div className="text-4xl font-black text-yellow-400 mb-2">Game Paused</div>
+                                  <div className="text-xl text-slate-300">Waiting for players to reconnect...</div>
+                              </div>
+                          </div>
+                      )}
+
                       <div className="w-full mb-4 lg:hidden">
                         <Toolbox />
                       </div>
@@ -244,26 +337,36 @@ export default function Room() {
         </div>
 
         {/* Right Col: Sidebar (Players / Settings / Chat) */}
-        <div className="space-y-6 h-[80vh] flex flex-col">
+        <div className="order-2 lg:order-none space-y-4 md:space-y-6 flex flex-col lg:h-[80vh]">
             <div className="bg-slate-800 rounded-xl p-4 shadow-xl">
             <h2 className="text-xl font-semibold mb-2">Players ({connectedPlayers}/{settings.maxPlayers})</h2>
             <ul className="space-y-1 max-h-48 overflow-y-auto">
-                {players.map((p) => (
-                <li key={p.id} className={`flex justify-between items-center p-3 rounded-lg bg-slate-700/50 ${!p.connected ? 'opacity-50' : ''}`}>
-                    <div className="flex items-center gap-3">
-                    <div className={`w-2 h-2 rounded-full ${p.connected ? 'bg-green-400' : 'bg-red-400'}`}></div>
-                    <div className="flex flex-col">
-                        <span className="font-medium flex items-center gap-2">
-                            {p.name} {p.id === playerId ? '(You)' : ''}
-                            {p.id === hostId && (
-                                <span className="text-[10px] uppercase font-bold tracking-wider bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">Host</span>
-                            )}
-                        </span>
-                    </div>
-                    </div>
-                    <span className="text-slate-400 font-medium">{p.score} pts</span>
-                </li>
-                ))}
+                {players.map((p) => {
+                    const hasGuessed = useGameStore.getState().guessedPlayers?.includes?.(p.id) || false;
+                    const isDrawer = p.id === drawerId;
+                    return (
+                        <li key={p.id} className={`flex justify-between items-center p-3 rounded-lg bg-slate-700/50 ${!p.connected ? 'opacity-50' : ''} ${hasGuessed ? 'border border-green-500/50 bg-green-500/10' : ''}`}>
+                            <div className="flex items-center gap-3">
+                                <div className={`w-2 h-2 rounded-full ${p.connected ? 'bg-green-400' : 'bg-red-400'}`}></div>
+                                <div className="flex flex-col">
+                                    <span className="font-medium flex items-center gap-2">
+                                        {p.name} {p.id === playerId ? '(You)' : ''}
+                                        {p.id === hostId && (
+                                            <span className="text-[10px] uppercase font-bold tracking-wider bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded">Host</span>
+                                        )}
+                                        {isDrawer && phase !== 'LOBBY' && (
+                                            <Edit3 size={14} className="text-blue-400" />
+                                        )}
+                                        {hasGuessed && (
+                                            <CheckCircle2 size={14} className="text-green-400" />
+                                        )}
+                                    </span>
+                                </div>
+                            </div>
+                            <span className="text-slate-400 font-medium">{p.score} pts</span>
+                        </li>
+                    );
+                })}
             </ul>
             </div>
 
@@ -333,7 +436,7 @@ export default function Room() {
             )}
 
             {phase !== 'LOBBY' && (
-              <div className="flex-1 min-h-[300px]">
+              <div className="flex-1 min-h-[200px] md:min-h-[300px]">
                 <Chat />
               </div>
             )}

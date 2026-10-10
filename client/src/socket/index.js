@@ -20,8 +20,23 @@ socket.on('room:state', (state) => {
   useGameStore.getState().setGameState(state);
 });
 
-socket.on('canvas:snapshot', ({ ops }) => {
-  useCanvasStore.getState().setOps(ops);
+socket.on('game:snapshot', (snapshot) => {
+  useGameStore.getState().setGameState({
+    phase: snapshot.phase,
+    settings: snapshot.settings,
+    turnScores: snapshot.scores,
+    hintMask: snapshot.hintMask,
+    endsAt: snapshot.endsAt,
+    paused: snapshot.paused
+  });
+  
+  if (snapshot.ops) {
+     useCanvasStore.getState().setOps(snapshot.ops);
+  }
+  
+  if (snapshot.chatHistory) {
+     window.dispatchEvent(new CustomEvent('chat:history', { detail: snapshot.chatHistory }));
+  }
 });
 
 socket.on('canvas:op', (op) => {
