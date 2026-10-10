@@ -25,6 +25,9 @@ export class RoomManager {
       guessedPlayers: new Set(),
       turnScores: {},
       finalScores: {},
+      chatHistory: [],
+      paused: false,
+      timeRemaining: 0,
       settings: {
         rounds: 3,
         drawTimeSec: 80,
@@ -105,6 +108,33 @@ export class RoomManager {
       room.hostId = nextHost.id;
     } else {
       room.hostId = null;
+    }
+  }
+
+  permanentlyRemovePlayer(roomId, playerId) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    const idx = room.players.findIndex(p => p.id === playerId);
+    if (idx === -1) return;
+
+    room.players.splice(idx, 1);
+
+    // If host leaves permanently, migrate if not already handled
+    if (room.hostId === playerId) {
+      this.migrateHost(roomId);
+    }
+
+    // Fix up turn queue
+    const turnQueueIdx = room.turnQueue.indexOf(playerId);
+    if (turnQueueIdx !== -1) {
+      room.turnQueue.splice(turnQueueIdx, 1);
+      
+      // If the removed player was BEFORE the current turn index, shift the index left
+      // so we don't skip the next player
+      if (turnQueueIdx < room.currentTurnIndex) {
+        room.currentTurnIndex = Math.max(0, room.currentTurnIndex - 1);
+      }
     }
   }
 

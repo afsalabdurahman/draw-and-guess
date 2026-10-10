@@ -8,9 +8,10 @@ import {
   strokeStartSchema, strokePointsSchema, strokeEndSchema, fillSchema, simpleOpSchema,
   wordPickSchema, chatSendSchema
 } from './net/schema.js';
-import { startGame, handleWordPick, broadcastRoomState, checkTurnEarlyEnd } from './rooms/stateMachine.js';
+import { startGame, handleWordPick, broadcastRoomState, checkTurnEarlyEnd, pauseGame, resumeGame, returnToLobby, endTurn } from './rooms/stateMachine.js';
 import { checkGuess } from './game/guess.js';
 import { calculateGuesserScore } from './game/scoring.js';
+import { timerManager } from './rooms/TimerManager.js';
 
 const app = express();
 const server = createServer(app);
@@ -62,11 +63,45 @@ io.on('connection', (socket) => {
       const player = roomManager.joinRoom(data.roomId, data, socket.id);
       
       socket.join(data.roomId);
-      broadcastRoomState(io, data.roomId);
       
       const room = roomManager.getRoom(data.roomId);
-      if (room.phase === 'DRAWING') {
-        socket.emit('canvas:snapshot', { ops: room.ops });
+      if (!room) throw new Error('Room not found');
+
+      // Clear grace timer if it existed
+      timerManager.clear(data.roomId, `grace_${player.id}`);
+
+      // If they were the drawer, clear drawerDrop timer
+      if (room.drawerId === player.id) {
+        timerManager.clear(data.roomId, `drawerDrop_${player.id}`);
+      }
+
+      // Check if room was paused and can now resume
+      const connectedPlayers = room.players.filter(p => p.connected).length;
+      if (room.paused && connectedPlayers >= 2) {
+        resumeGame(io, data.roomId);
+      } else {
+        broadcastRoomState(io, data.roomId);
+      }
+      
+      // Full snapshot on join
+      socket.emit('game:snapshot', {
+        phase: room.phase,
+        settings: room.settings,
+        scores: room.turnScores,
+        hintMask: room.hintMask,
+        endsAt: room.endsAt,
+        ops: room.ops,
+        chatHistory: room.chatHistory,
+        paused: room.paused
+      });
+
+      if (room.phase === 'DRAWING' && room.drawerId === player.id) {
+        socket.emit('turn:secret_word', { word: room.secretWord });
+      }
+
+      // If it's choosing word and they are drawer, resend choices
+      if (room.phase === 'CHOOSING_WORD' && room.drawerId === player.id) {
+        socket.emit('word:choices', { choices: room.wordChoices });
       }
       
       if (callback) {
@@ -270,13 +305,17 @@ io.on('connection', (socket) => {
           
           room.turnScores[player.id] = score;
 
-          io.to(data.roomId).emit('chat:message', {
+          const msg = {
             id: crypto.randomUUID(),
             sender: 'SYSTEM',
             text: `${player.name} guessed the word!`,
             system: true,
             color: 'text-green-400'
-          });
+          };
+          room.chatHistory.push(msg);
+          if (room.chatHistory.length > 50) room.chatHistory.shift();
+
+          io.to(data.roomId).emit('chat:message', msg);
 
           checkTurnEarlyEnd(io, data.roomId);
           return;
@@ -318,11 +357,15 @@ io.on('connection', (socket) => {
       }
 
       // Normal chat
-      io.to(data.roomId).emit('chat:message', {
+      const normalMsg = {
         id: crypto.randomUUID(),
         sender: player.name,
         text
-      });
+      };
+      room.chatHistory.push(normalMsg);
+      if (room.chatHistory.length > 50) room.chatHistory.shift();
+
+      io.to(data.roomId).emit('chat:message', normalMsg);
     } catch (e) {}
   });
 
@@ -332,6 +375,41 @@ io.on('connection', (socket) => {
       if (player) {
         roomManager.leaveRoom(roomId, socket.id);
         broadcastRoomState(io, roomId);
+        
+        // Disconnect rules
+        const connectedPlayers = room.players.filter(p => p.connected).length;
+        
+        // 1. Min players check
+        if (connectedPlayers < 2) {
+          pauseGame(io, roomId);
+        }
+
+        // 2. Drawer drop 10s check
+        if (room.phase === 'DRAWING' && room.drawerId === player.id) {
+          timerManager.set(roomId, `drawerDrop_${player.id}`, () => {
+            const currentRoom = roomManager.getRoom(roomId);
+            if (currentRoom && currentRoom.phase === 'DRAWING' && currentRoom.drawerId === player.id) {
+               // Give 0 points to drawer (since they disconnected), turnScores logic takes care of this by not setting it
+               endTurn(io, roomId);
+            }
+          }, 10000);
+        }
+
+        // 3. 30s Grace timer for permanent removal
+        timerManager.set(roomId, `grace_${player.id}`, () => {
+          roomManager.permanentlyRemovePlayer(roomId, player.id);
+          broadcastRoomState(io, roomId);
+          
+          const currentConnected = roomManager.getRoom(roomId)?.players.filter(p => p.connected).length || 0;
+          if (roomManager.getRoom(roomId)?.paused && currentConnected < 2) {
+             returnToLobby(io, roomId);
+          } else {
+             checkTurnEarlyEnd(io, roomId);
+          }
+        }, 30000);
+        
+        // 4. Check if everyone remaining guessed
+        checkTurnEarlyEnd(io, roomId);
       }
     });
     console.log(`Socket disconnected: ${socket.id}`);

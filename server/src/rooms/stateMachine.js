@@ -133,6 +133,70 @@ export const startDrawing = (io, roomId, word) => {
   timerManager.set(roomId, 'hint2', sendHint, duration * 0.7);
 };
 
+export const pauseGame = (io, roomId) => {
+  const room = getRoomAndPlayers(roomId);
+  if (!room || room.paused || room.phase === 'LOBBY' || room.phase === 'GAME_END') return;
+
+  room.paused = true;
+  room.timeRemaining = Math.max(0, room.endsAt - Date.now());
+  timerManager.clearAll(roomId);
+  broadcastRoomState(io, roomId);
+};
+
+export const resumeGame = (io, roomId) => {
+  const room = getRoomAndPlayers(roomId);
+  if (!room || !room.paused) return;
+
+  room.paused = false;
+  
+  if (room.phase === 'DRAWING') {
+    room.endsAt = Date.now() + room.timeRemaining;
+    
+    timerManager.set(roomId, 'turnEnd', () => {
+      endTurn(io, roomId);
+    }, room.timeRemaining);
+
+    // Re-calculate hints if needed, but for simplicity we'll just skip re-scheduling hints
+    // if we are resuming. The timeRemaining might have passed the hint mark.
+  } else if (room.phase === 'CHOOSING_WORD') {
+    timerManager.set(roomId, 'autopick', () => {
+      handleWordPick(io, roomId, room.wordChoices[0]);
+    }, room.timeRemaining || 15000);
+  } else if (room.phase === 'TURN_END') {
+    timerManager.set(roomId, 'nextTurn', () => {
+      // same logic as endTurn
+      room.currentTurnIndex++;
+      if (room.currentTurnIndex >= room.turnQueue.length) {
+        room.round++;
+        if (room.round > room.settings.rounds) {
+          endGame(io, roomId);
+          return;
+        }
+        room.turnQueue = room.players.filter(p => p.connected).map(p => p.id);
+        room.currentTurnIndex = 0;
+      }
+      if (room.turnQueue.length > 0) {
+        startChoosingWord(io, roomId, room.turnQueue[room.currentTurnIndex]);
+      } else {
+        endGame(io, roomId);
+      }
+    }, room.timeRemaining || 5000);
+  }
+
+  broadcastRoomState(io, roomId);
+};
+
+export const returnToLobby = (io, roomId) => {
+  const room = getRoomAndPlayers(roomId);
+  if (!room) return;
+
+  timerManager.clearAll(roomId);
+  room.phase = 'LOBBY';
+  room.paused = false;
+  room.players.forEach(p => p.score = 0);
+  broadcastRoomState(io, roomId);
+};
+
 export const checkTurnEarlyEnd = (io, roomId) => {
   const room = getRoomAndPlayers(roomId);
   if (!room || room.phase !== 'DRAWING') return;
@@ -140,6 +204,9 @@ export const checkTurnEarlyEnd = (io, roomId) => {
   const nonDrawers = room.players.filter(p => p.id !== room.drawerId && p.connected);
   const allGuessed = nonDrawers.length > 0 && nonDrawers.every(p => room.guessedPlayers.has(p.id));
   
+  // If drawer is disconnected and everyone remaining has guessed, or there are no non-drawers
+  // Wait, if no non-drawers left, it shouldn't auto-end if they might reconnect? 
+  // No, if nonDrawers.length === 0, the game would be paused anyway.
   if (allGuessed) {
     endTurn(io, roomId);
   }

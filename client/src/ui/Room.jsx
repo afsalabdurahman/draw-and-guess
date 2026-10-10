@@ -22,6 +22,7 @@ export default function Room() {
   const drawerId = useGameStore((state) => state.drawerId);
   const secretWord = useGameStore((state) => state.secretWord);
   const hintMask = useGameStore((state) => state.hintMask);
+  const paused = useGameStore((state) => state.paused);
   const settings = useGameStore((state) => state.settings);
   const setRoomInfo = useGameStore((state) => state.setRoomInfo);
   const playerId = useGameStore((state) => state.playerId);
@@ -226,6 +227,24 @@ export default function Room() {
                       {phase === 'TURN_END' && (
                           <div className="absolute inset-0 bg-slate-900/80 backdrop-blur z-40 flex flex-col items-center justify-center">
                               {/* The Scoreboard modal handles this now */}
+                          </div>
+                      )}
+
+                      {paused && (
+                          <div className="absolute inset-0 bg-slate-900/80 backdrop-blur z-50 flex items-center justify-center">
+                              <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-yellow-500/50 text-center animate-pulse">
+                                  <div className="text-4xl font-black text-yellow-400 mb-2">Game Paused</div>
+                                  <div className="text-xl text-slate-300">Waiting for players to reconnect...</div>
+                              </div>
+                          </div>
+                      )}
+
+                      {paused && (
+                          <div className="absolute inset-0 bg-slate-900/80 backdrop-blur z-50 flex items-center justify-center">
+                              <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-yellow-500/50 text-center animate-pulse">
+                                  <div className="text-4xl font-black text-yellow-400 mb-2">Game Paused</div>
+                                  <div className="text-xl text-slate-300">Waiting for players to reconnect...</div>
+                              </div>
                           </div>
                       )}
 

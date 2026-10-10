@@ -13,9 +13,16 @@ export default function Chat() {
       setMessages((prev) => [...prev, msg]);
     };
 
+    const handleHistory = (e) => {
+      setMessages(e.detail);
+    };
+
     socket.on('chat:message', handleChat);
+    window.addEventListener('chat:history', handleHistory);
+    
     return () => {
       socket.off('chat:message', handleChat);
+      window.removeEventListener('chat:history', handleHistory);
     };
   }, []);
 

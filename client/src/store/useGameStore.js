@@ -13,6 +13,7 @@ export const useGameStore = create((set) => ({
   hintMask: null,
   endsAt: 0,
   timeOffset: 0,
+  paused: false,
   turnScores: {},
   finalScores: [],
   settings: {
