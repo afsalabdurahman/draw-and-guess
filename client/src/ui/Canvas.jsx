@@ -120,21 +120,22 @@ export default function Canvas({ disabled = false }) {
   return (
     <div 
       ref={containerRef}
-      className="w-full h-full flex items-center justify-center overflow-hidden touch-none"
+      className="w-full h-full flex items-center justify-center overflow-hidden"
+      style={{ touchAction: 'none' }}
     >
       <canvas
         ref={canvasRef}
         width={CANVAS_WIDTH}
         height={CANVAS_HEIGHT}
-        className="max-w-full max-h-full object-contain cursor-crosshair shadow-lg bg-white"
+        className="max-w-full max-h-full object-contain cursor-crosshair shadow-lg bg-white touch-none"
         onMouseDown={handlePointerDown}
         onMouseMove={handlePointerMove}
         onMouseUp={handlePointerUp}
         onMouseLeave={handlePointerLeave}
-        onTouchStart={handlePointerDown}
-        onTouchMove={handlePointerMove}
-        onTouchEnd={handlePointerUp}
-        onTouchCancel={handlePointerLeave}
+        onTouchStart={(e) => { e.preventDefault(); handlePointerDown(e); }}
+        onTouchMove={(e) => { e.preventDefault(); handlePointerMove(e); }}
+        onTouchEnd={(e) => { e.preventDefault(); handlePointerUp(e); }}
+        onTouchCancel={(e) => { e.preventDefault(); handlePointerLeave(e); }}
         style={{
           aspectRatio: `${CANVAS_WIDTH} / ${CANVAS_HEIGHT}`
         }}

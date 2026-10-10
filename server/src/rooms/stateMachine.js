@@ -25,7 +25,10 @@ export const broadcastRoomState = (io, roomId) => {
     phase: room.phase,
     hostId: room.hostId,
     drawerId: room.drawerId,
-    settings: room.settings
+    settings: room.settings,
+    guessedPlayers: Array.from(room.guessedPlayers),
+    paused: room.paused,
+    round: room.round
   });
 };
 
