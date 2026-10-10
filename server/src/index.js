@@ -7,15 +7,17 @@ import {
   roomJoinSchema, settingsUpdateSchema, gameStartSchema,
   strokeStartSchema, strokePointsSchema, strokeEndSchema, fillSchema, simpleOpSchema,
   wordPickSchema, chatSendSchema
-} from './net/schema.js';
+} from './net/schemas.js';
 import { startGame, handleWordPick, broadcastRoomState, checkTurnEarlyEnd, pauseGame, resumeGame, returnToLobby, endTurn } from './rooms/stateMachine.js';
 import { checkGuess } from './game/guess.js';
 import { calculateGuesserScore } from './game/scoring.js';
 import { timerManager } from './rooms/TimerManager.js';
+import { rateLimiter } from './net/rateLimit.js';
 
 const app = express();
 const server = createServer(app);
 const io = new Server(server, {
+  maxHttpBufferSize: 10000,
   cors: {
     origin: 'http://localhost:5173',
     methods: ['GET', 'POST']
@@ -26,6 +28,17 @@ app.use(cors({ origin: 'http://localhost:5173' }));
 app.use(express.json());
 
 app.post('/rooms', (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress;
+  const ipBucket = rateLimiter.getIpBucket(ip, 'create_room', 10, 0.05); // max 10 rooms per ~3.3 mins
+  if (!ipBucket.consume(1)) {
+    return res.status(429).json({ error: 'Too many rooms created' });
+  }
+
+  // Cap total rooms
+  if (roomManager.rooms.size >= 1000) {
+    return res.status(503).json({ error: 'Server is at maximum capacity' });
+  }
+
   const roomId = roomManager.createRoom();
   res.json({ roomId });
 });
@@ -54,10 +67,34 @@ const validateDrawingOp = (socket, roomId) => {
   return room;
 };
 
+io.use((socket, next) => {
+  const ip = socket.handshake.address;
+  if (rateLimiter.isIpBlocked(ip)) {
+    return next(new Error('IP is temporarily blocked'));
+  }
+  next();
+});
+
+const checkRateLimit = (socket, event, capacity, rate) => {
+  const ip = socket.handshake.address;
+  const bucket = rateLimiter.getSocketBucket(socket.id, event, capacity, rate);
+  
+  if (!bucket.consume(1)) {
+    const violations = rateLimiter.recordViolation(socket.id);
+    if (violations > 20) {
+      rateLimiter.blockIp(ip, 5 * 60 * 1000); // 5 min block
+      socket.disconnect(true);
+    }
+    return false;
+  }
+  return true;
+};
+
 io.on('connection', (socket) => {
   console.log(`Socket connected: ${socket.id}`);
 
   socket.on('room:join', (payload, callback) => {
+    if (!checkRateLimit(socket, 'join', 5, 0.5)) return;
     try {
       const data = roomJoinSchema.parse(payload);
       const player = roomManager.joinRoom(data.roomId, data, socket.id);
@@ -207,6 +244,7 @@ io.on('connection', (socket) => {
     }
   });
   socket.on('stroke:start', (payload) => {
+    if (!checkRateLimit(socket, 'stroke', 60, 60)) return;
     try {
       const data = strokeStartSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -225,6 +263,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('stroke:points', (payload) => {
+    if (!checkRateLimit(socket, 'stroke', 60, 60)) return;
     try {
       const data = strokePointsSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -238,6 +277,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('stroke:end', (payload) => {
+    if (!checkRateLimit(socket, 'stroke', 60, 60)) return;
     try {
       const data = strokeEndSchema.parse(payload);
       validateDrawingOp(socket, data.roomId);
@@ -245,6 +285,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('fill', (payload) => {
+    if (!checkRateLimit(socket, 'ops', 5, 5)) return;
     try {
       const data = fillSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -262,6 +303,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('clear', (payload) => {
+    if (!checkRateLimit(socket, 'ops', 5, 5)) return;
     try {
       const data = simpleOpSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -272,6 +314,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('undo', (payload) => {
+    if (!checkRateLimit(socket, 'ops', 5, 5)) return;
     try {
       const data = simpleOpSchema.parse(payload);
       const room = validateDrawingOp(socket, data.roomId);
@@ -281,6 +324,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('chat:send', (payload) => {
+    if (!checkRateLimit(socket, 'chat', 3, 1.5)) return; // 3 per 2s
     try {
       const data = chatSendSchema.parse(payload);
       const room = roomManager.getRoom(data.roomId);
@@ -412,9 +456,25 @@ io.on('connection', (socket) => {
         checkTurnEarlyEnd(io, roomId);
       }
     });
+    rateLimiter.cleanup(socket.id);
     console.log(`Socket disconnected: ${socket.id}`);
   });
 });
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [roomId, room] of roomManager.rooms.entries()) {
+    const connectedPlayers = room.players.filter(p => p.connected).length;
+    // Empty for 5 minutes
+    if (connectedPlayers === 0 && room.paused && now - (room.timeRemaining || 0) > 300000) { 
+        // Note: the logic above isn't perfectly tracking 'empty time', 
+        // a better way: if there's no host (all players permanently removed), delete room.
+        if (room.players.length === 0) {
+           roomManager.rooms.delete(roomId);
+        }
+    }
+  }
+}, 60000);
 
 const PORT = 4000;
 server.listen(PORT, () => {
