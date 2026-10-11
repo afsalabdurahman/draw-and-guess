@@ -1,1 +1,60 @@
 @import "tailwindcss";
+.pictionary-bg {
+    background-image: url("/picture-bg.png");
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-color: #f8fafc;
+}
+
+/* Floating doodles */
+.doodle {
+    position: absolute;
+    z-index: 1;
+    font-size: 2.5rem;
+    opacity: 0.75;
+    pointer-events: none;
+    animation: float-doodle 6s ease-in-out infinite;
+}
+
+.doodle-one {
+    top: 12%;
+    left: 12%;
+    animation-delay: 0s;
+}
+
+.doodle-two {
+    top: 20%;
+    right: 15%;
+    animation-delay: 1s;
+}
+
+.doodle-three {
+    bottom: 15%;
+    left: 18%;
+    animation-delay: 2s;
+}
+
+.doodle-four {
+    bottom: 20%;
+    right: 12%;
+    animation-delay: 3s;
+}
+
+@keyframes float-doodle {
+
+    0%,
+    100% {
+        transform: translateY(0) rotate(-8deg);
+    }
+
+    50% {
+        transform: translateY(-22px) rotate(8deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .doodle {
+        animation: none;
+    }
+}
