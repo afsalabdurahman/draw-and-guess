@@ -25,34 +25,47 @@ export default function Home() {
     }
   };
 
-  return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-      <div className="bg-slate-800 p-8 rounded-xl shadow-2xl w-full max-w-md">
-        <h1 className="text-4xl font-bold text-white mb-8 text-center bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
-          Pictionary
-        </h1>
-        <form onSubmit={handleCreateRoom} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Your Name</label>
-            <input
-              type="text"
-              required
-              maxLength={20}
-              className="w-full px-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-              placeholder="e.g. Picasso"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
-          >
-            {loading ? 'Creating...' : 'Create Room'}
-          </button>
-        </form>
-      </div>
-    </div>
-  );
+
+    return (
+        <div className="pictionary-bg min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
+            {/* Animated background doodles */}
+            <div className="doodle doodle-one">✏️</div>
+            <div className="doodle doodle-two">⭐</div>
+            <div className="doodle doodle-three">🎨</div>
+            <div className="doodle doodle-four">💡</div>
+
+            {/* Room creation card */}
+            <div className="relative z-10 bg-white/90 backdrop-blur-md p-8 rounded-2xl shadow-2xl w-full max-w-md border border-white/60">
+                <h1 className="text-4xl font-bold mb-8 text-center bg-clip-text text-transparent bg-gradient-to-r from-blue-500 to-purple-600">
+                    Pictionary
+                </h1>
+
+                <form onSubmit={handleCreateRoom} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">
+                            Enter Your Name
+                        </label>
+                        <input
+                            type="text"
+                            required
+                            maxLength={20}
+                            className="w-full px-4 py-3 bg-white border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                            placeholder="e.g. Picasso"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                        />
+                    </div>
+
+                    <button
+                        type="submit"
+                        disabled={loading}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-lg transition-all hover:scale-[1.02] disabled:opacity-50"
+                    >
+                        {loading ? "Creating..." : "Create Room"}
+                    </button>
+                </form>
+            </div>
+        </div>
+    );
+
 }
