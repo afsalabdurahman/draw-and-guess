@@ -1,8 +1,8 @@
 import { io } from 'socket.io-client';
 import { useGameStore } from '../store/useGameStore';
 import { useCanvasStore } from '../store/useCanvasStore';
-
-export const socket = io('http://localhost:4000', {
+const apiUrl = import.meta.env.VITE_API_URL;
+export const socket = io(apiUrl, {
   autoConnect: false,
 });
 

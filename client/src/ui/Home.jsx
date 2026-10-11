@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-
+const apiUrl = import.meta.env.VITE_API_URL;
 export default function Home() {
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -12,7 +12,7 @@ export default function Home() {
     
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:4000/rooms', { method: 'POST' });
+      const res = await fetch(`${apiUrl}/rooms`, { method: 'POST' });
       const data = await res.json();
       
       sessionStorage.setItem('tempName', name.trim());

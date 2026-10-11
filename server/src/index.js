@@ -1,4 +1,6 @@
 import express from 'express';
+import dotenv from 'dotenv';
+dotenv.config();
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
@@ -16,15 +18,17 @@ import { rateLimiter } from './net/rateLimit.js';
 
 const app = express();
 const server = createServer(app);
+const url = process.env.CLIENT_IP || "http://localhost:3000"
 const io = new Server(server, {
   maxHttpBufferSize: 10000,
   cors: {
-    origin: 'http://localhost:5173',
+    origin: url,
     methods: ['GET', 'POST']
   }
 });
 
-app.use(cors({ origin: 'http://localhost:5173' }));
+console.log(url,"Url")
+app.use(cors({ origin: url }));
 app.use(express.json());
 
 app.post('/rooms', (req, res) => {
