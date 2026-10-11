@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { renderOps } from '../canvas/renderer';
-
+const apiUrl = import.meta.env.VITE_API_URL;
 const CANVAS_WIDTH = 800;
 const CANVAS_HEIGHT = 600;
 
@@ -22,7 +22,7 @@ export default function Replay({ roomId, onClose }) {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const res = await fetch(`http://localhost:4000/rooms/${roomId}/replay`);
+        const res = await fetch(`${apiUrl}/rooms/${roomId}/replay`);
         if (!res.ok) throw new Error('Failed to fetch replay data');
         const data = await res.json();
         setHistory(data.history || []);
